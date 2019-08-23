@@ -1,4 +1,4 @@
-from .modmailteddy import ModmailTeddy
+from .base import ModmailTeddy
 
 
 def setup(bot):
