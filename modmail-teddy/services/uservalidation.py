@@ -15,4 +15,3 @@ class UserValidation:
         if thread_open:
             return False
         return True
-
