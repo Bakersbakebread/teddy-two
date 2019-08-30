@@ -75,7 +75,8 @@ class ModmailThread:
                 inline=False,
             )
         embed.set_footer(
-            text=("Member #{} | User ID: {}").format(member_number, user.id))
+            text=("Member #{} | User ID: {}").format(member_number, user.id)
+        )
 
         name = str(user)
         name = " ~ ".join((name, user.nick)) if user.nick else name
@@ -103,12 +104,13 @@ class ModmailThread:
         else:
             attachments_string = f" "
 
-        description = (
-            f"```{self.message.content}```\n"
-            f"{attachments_string}"
-        )
+        description = f"```{self.message.content}```\n" f"{attachments_string}"
 
-        return discord.Embed(description=description, title="Message contents", color=discord.Color.green())
+        return discord.Embed(
+            description=description,
+            title="Message contents",
+            color=discord.Color.green(),
+        )
 
     async def create_and_save(self) -> list:
         new_thread = await self.create_new_json()
