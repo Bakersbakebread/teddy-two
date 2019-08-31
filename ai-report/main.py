@@ -1,8 +1,8 @@
 import discord
-from discord import utils
 from redbot.core import Config, commands
 import aiohttp
 import logging
+from datetime import date
 
 log = logging.getLogger(name="red.bread.aireport")
 
@@ -178,7 +178,8 @@ class AiReport(commands.Cog):
         """
         Grab the defined sentiments for user provided, shows guild if none provided
 
-        Net score is defined as : (Positive + Neutral Conversations – Negative Conversations) / Total Conversations.
+        Net score is defined as :
+        (Positive + Neutral Conversations – Negative Conversations) / Total Conversations.
         """
         glob_previous_neg = await self.config.negative()
         glob_previous_pos = await self.config.positive()
@@ -191,15 +192,14 @@ class AiReport(commands.Cog):
 
             total_conversations = (previous_pos + previous_neg + previous_neut)
             try:
-                net_score = ((previous_pos + previous_neut) - previous_neg) / total_conversations
+                net_score = (((previous_pos + previous_neut) - previous_neg) / total_conversations) * 100
             except ZeroDivisionError:
                 net_score = 0.0
-
-            description = f"Total Converations: `{total_conversations}`\n\n" \
+            description = f"Total messages: `{total_conversations}`\n\n" \
                 f"Positive: `{previous_pos}`\n" \
                 f"Negative: `{previous_neg}`\n" \
                 f"Neutral: `{previous_neut}`\n\n" \
-                f"Total net score: `{net_score}`"
+                f"Total net score: `{net_score:.2f}`"
 
             embed = discord.Embed(title="Sentiment for User", description=description, color=discord.Color.blue())
             embed.set_author(name=f"{member} - {member.id}", icon_url=member.avatar_url)
@@ -208,24 +208,40 @@ class AiReport(commands.Cog):
 
         else:
             total_conversations = (glob_previous_pos + glob_previous_neg + glob_previous_neut)
+            x = ctx.guild.members
+            counter = 0
+            new_to = 0
+            for y in x:
+                if y.joined_at.date() == date.today():
+                    counter += 1
+                    if y.created_at.date() == date.today():
+                        new_to += 1
+            per_cent = (new_to / counter * 100)
+            per_cent_string = ("%.2f" % per_cent)
+
             try:
-                net_score = ((glob_previous_pos + glob_previous_neut) - glob_previous_neg) / total_conversations
+                net_score = (((glob_previous_pos + glob_previous_neut) - glob_previous_neg) / total_conversations) * 100
             except ZeroDivisionError:
                 net_score = 0.0
 
-            description = f"Total Converations: `{total_conversations}`\n\n" \
+            conversations_field = f"Total Converations: `{total_conversations}`\n\n" \
                 f"Positive: `{glob_previous_pos}`\n" \
                 f"Negative: `{glob_previous_neg}`\n" \
                 f"Neutral: `{glob_previous_neut}`\n\n" \
-                f"Total net score: `{net_score}`"
+                f"Total net score: `{net_score:.2f}`"
+
+            users_joined_field = \
+                f"Total members: `{len(x)}`\n" \
+                    f"New to server: `{counter}`\n" \
+                    f"New to Discord: `{new_to}`\n" \
+                    f"`{per_cent}%` new to Discord users joined today."
 
             embed = discord.Embed(title="Official Fortnite Discord Sentiment",
-                                  description=description,
                                   color=discord.Color.blue())
             embed.set_author(name=f"{ctx.guild.name}", icon_url=ctx.guild.icon_url)
-
+            embed.add_field(name="Server sentiment", value=conversations_field)
+            embed.add_field(name="New Users", value=users_joined_field)
             await ctx.send(embed = embed)
-
 
     @commands.Cog.listener(name="on_message")
     async def ai_takeover(self, message: discord.Message):
@@ -288,7 +304,7 @@ class AiReport(commands.Cog):
                         ):
                             self.bot.dispatch("account_selling", message)
 
-                        if (
+                        elif (
                             message.channel.id == 338017726394138624
                             and intent[0]["value"] == "LFG"
                             and intent[0]["confidence"] > 0.7
