@@ -1,10 +1,13 @@
 import discord
 from redbot.core import Config, commands
-from .services.uservalidation import UserValidation
+from redbot.core.commands import Greedy
+from .services.uservalidation import UserValidation, yes_or_no
 from .services.channel import ChannelService
 from .services.messaging import ModmailThread
+from .services.setup import SetupService
 from .exceptions import *
 from .casetypes import CASETYPES
+
 from redbot.core import checks, modlog
 
 import aiohttp
@@ -13,7 +16,7 @@ import logging
 import asyncio
 
 #
-# log = logging.getLogger("red.modmail")
+log = logging.getLogger("red.modmail")
 
 GUILD = 614954723816112266
 
@@ -21,12 +24,17 @@ DEFAULT_USER = {
     "last_messaged": None,
     "thread_is_open": False,
     "current_thread": 0,
+    "view_access": False,
     "blocked": False,
     "threads": [],
+    "type_holding": False,
 }
 
 DEFAULT_GLOBAL = {
     "threads": [],
+    "archive": [],
+    "modmail_type": "channel",
+    "allowed_roles": [],
     "new_cat_id": None,
     "active_cat_id": None,
     "modlog_id": None,
@@ -36,7 +44,8 @@ DEFAULT_GLOBAL = {
 
 
 class ModmailTeddy(commands.Cog):
-    def __init__(self, bot):
+    def __init__(self, bot, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.bot = bot
         self.guild = self.bot.get_guild(GUILD)
         self.config = Config.get_conf(
@@ -44,6 +53,7 @@ class ModmailTeddy(commands.Cog):
         )
         self.config.register_user(**DEFAULT_USER)
         self.config.register_global(**DEFAULT_GLOBAL)
+        self.settings = SetupService(self.bot, self.config)
         asyncio.create_task(self.register_casetypes())
         try:
             self.modcog = self.bot.get_cog("Mod")
@@ -74,6 +84,14 @@ class ModmailTeddy(commands.Cog):
                 print(f"Case load {c['name']} failed - {e}")
                 pass
 
+    async def is_modmail_channel(ctx):
+        return ctx.channel.id == 561686306866855979
+
+    @commands.command()
+    @commands.check(is_modmail_channel)
+    async def pp(self, ctx):
+        await ctx.send("in channel")
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         author = message.author
@@ -82,41 +100,156 @@ class ModmailTeddy(commands.Cog):
         if author == self.bot.user:
             return
         try:
-            can_send = await self.validate_user.can_send_modmail(author)
+            can_send, current_thread = await self.validate_user.can_send_modmail(author)
         except UserIsBlocked:
             # log.info(f"Blocked user {author} - {author.id} attempted to send message")
             return await author.send(
                 f"You have been blocked from sending modmail, \
                 if you believe this is wrong please contact a Mod directly."
             )
+        except WaitingForMessageType as exception:
+            return await author.send(exception.args[0])
 
-        if not can_send:
+        message_service = ModmailThread(author, message, self.config, self.bot)
+
+        if can_send:
             # user is currently waiting for a reply
-            return await author.send(
-                "Please wait for your previous message to be answered before sending another."
+            channel: discord.TextChannel = self.bot.get_guild(GUILD).get_channel(
+                current_thread
+            )
+        else:
+            try:
+                # set holding
+                await self.config.user(author).type_holding.set(True)
+
+                message_type = await message_service.ask_for_type()
+                guild = self.bot.get_guild(await self.config.guild_id())
+
+                channel = await ChannelService(
+                    author, message, self.config, guild
+                ).create_new_channel()
+
+            except NoNewCategory as e:
+                # enforce categories for organising
+                await self.send_to_owner(
+                    f"Attempted to create modmail channel. Failed because `{e.args[0]}`"
+                )
+                log.warning(
+                    f"Attempted to create modmail channel. Failed because `{e.args[0]}`"
+                )
+                return
+            except discord.Forbidden as e:
+                log.warning(
+                    f"Attempted to create modmail channel. Failed because `{e.text}`"
+                )
+                return await self.send_to_owner(
+                    f"Attempted to create modmail channel. Failed because `{e.text}`"
+                )
+            finally:
+                await self.config.user(author).type_holding.set(False)
+
+        new_modmail_embed = await message_service.create_and_save()
+
+        await self.config.user(author).thread_is_open.set(True)
+        await self.config.user(author).current_thread.set(channel.id)
+
+        if can_send and current_thread is not None:
+            # only send the message contents and not user info :)
+            await channel.send(embed=new_modmail_embed[1])
+        else:
+            for embed in new_modmail_embed:
+                await channel.send(embed=embed)
+
+    @commands.group(name="modmailset")
+    async def _modmail_settings(self, ctx):
+        pass
+
+    @_modmail_settings.command()
+    async def guild(self, ctx, guild: int = None):
+        if guild is None:
+            guild = ctx.guild.id
+
+        guild = self.bot.get_guild(guild)
+        if guild is None:
+            return await ctx.send(
+                f"`⛔ Invalid guild provided`\n"
+                f"**The bot must be in the guild you are trying to assign.**\n"
+                f"You can attempt to create a guild with `{ctx.prefix}modmailset createguild`"
             )
 
-        try:
-            channel = await ChannelService(
-                author, message, self.config, self.bot.get_guild(GUILD)
-            ).create_new_channel()
+        # check if guild ID
+        config_guild_id = await self.config.guild_id()
+        if config_guild_id is not None:
+            config_guild = self.bot.get_guild(config_guild_id)
+            result = await yes_or_no(
+                ctx,
+                message=f"You currently have your guild set as: `{config_guild}` `({config_guild.id})`\n"
+                f"Would you like to override this?",
+            )
+            if result:
+                await self.config.guild_id.set(guild.id)
+                return await ctx.send(
+                    f"👍🏼 Guild has been set to `{guild}` `({guild.id})`"
+                )
+            else:
+                return await ctx.send(
+                    f"👉🏼 Okay, guild has remained as `{config_guild}` `({config_guild.id})`"
+                )
 
-        except NoNewCategory:
-            # enforce categories for organising
-            await self.send_to_owner("Missing 'new' category.")
-            return
+    ### Roles
+    @_modmail_settings.command()
+    async def addroles(self, ctx, roles: Greedy[discord.Role]):
+        fmt_roles = "\n".join([f"`{role.name}`" for role in roles])
+        result = await yes_or_no(
+            ctx,
+            message=(
+                f"**Granting these roles permissions to view / reply to modmail:**"
+                f"\n\n{fmt_roles}\n\n"
+                f"Continue?"
+            ),
+        )
+        if result:
+            for role in roles:
+                await self.settings.append_allowed_role(role)
+            await ctx.send(f"👍🏼 Added `{len(roles)}` roles to allowed roles.")
+        else:
+            await ctx.send("👍🏼 Okay. Nothing changed.")
 
-        if not channel:
-            print(self.bot.get_user(self.bot.owner_id))
-            await self.send_to_owner("Missing perms to create channels.")
-            return
+    @_modmail_settings.command()
+    async def viewroles(self, ctx):
+        guild: discord.Guild = self.bot.get_guild(await self.config.guild_id())
+        await ctx.send(
+            "**Roles with view / reply access to modmail:**\n"
+            + (
+                "\n".join(
+                    [
+                        f"`{role.name}`"
+                        for role in [
+                        guild.get_role(role)
+                        for role in await self.config.allowed_roles()
+                    ]
+                    ]
+                )
+            )
+        )
 
-        new_modmail_embed = await ModmailThread(
-            author, message, self.config, self.bot
-        ).create_and_save()
+    ### Users
+    @_modmail_settings.command()
+    async def addusers(self, ctx, users: Greedy[discord.Member]):
+        for user in users:
+            await self.config.user(user).view_access.set(True)
+        await ctx.send("👍🏼 Users now have view / reply access")
 
-        # await self.config.user(author).thread_is_open.set(True)
-        # await self.config.user(author).current_thread.set(channel.id)
+    @_modmail_settings.command()
+    async def delusers(self, ctx, users: Greedy[discord.Member]):
+        for user in users:
+            await self.config.user(user).view_access.set(False)
+        await ctx.send("👍🏼 Users access have been removed.")
 
-        for embed in new_modmail_embed:
-            await channel.send(embed=embed)
+    @_modmail_settings.command()
+    async def block(self, ctx, member: discord.Member):
+        before = await self.config.user(member).blocked()
+        await self.config.user(member).blocked.set(not before)
+        await ctx.send(
+            f"👍🏼 `{member}` has been " + ("`blocked`" if not before else "`unblocked`")
+        )

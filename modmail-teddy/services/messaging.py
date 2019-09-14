@@ -1,6 +1,8 @@
 import discord
 from redbot.core.utils.common_filters import filter_invites
-
+from ..enums import ThreadStatus
+from .uservalidation import message_type_reaction
+from datetime import datetime
 from redbot.cogs.mod.names import ModInfo
 
 
@@ -10,6 +12,8 @@ class ModmailThread:
         self.message = message
         self.config = config
         self.bot = bot
+        self.created_at = self.message.created_at
+        self.channel = self.message.channel
 
     async def build_user_info_embed(self):
         """Stolen from core red cogs and adapted where needed.."""
@@ -100,17 +104,24 @@ class ModmailThread:
         attached_list = "\n".join(attachments_urls)
 
         if self.message.attachments:
-            attachments_string = f"**Attachments**\n {attached_list}"
+            attachments_string = f"```\n{attached_list}\n```"
         else:
             attachments_string = f" "
 
-        description = f"```{self.message.content}```\n" f"{attachments_string}"
+        description = f"```{self.message.content}```\n"
 
-        return discord.Embed(
+        embed = discord.Embed(
             description=description,
             title="Message contents",
             color=discord.Color.green(),
+            timestamp=self.created_at,
         )
+        embed.set_footer(text=f"New message received from {self.member}")
+        if len(attachments_urls) > 0:
+            embed.add_field(name="Attachments", value=attachments_string)
+            embed.set_image(url=attachments_urls[0])
+
+        return embed
 
     async def create_and_save(self) -> list:
         new_thread = await self.create_new_json()
@@ -132,22 +143,17 @@ class ModmailThread:
         return new_reply
 
     async def create_new_json(self):
+        attachments = [a.url for a in self.message.attachments]
         author = self.message.author
-        json_author = await self.author_to_json(author)
-        json_message = {
-            "author": json_author,
-            "attachments": self.message.attachments,
-            "content": self.message.content,
-        }
         final_json = {
-            "id": self.message.id,
-            "author_id": author.id,
-            "status": "new",
-            "mod_assigned": None,
-            "category": None,
-            "created_at": self.message.created_at.strftime("%m/%d/%Y, %H:%M"),
-            "thread": json_message,
-            "reply": {},
+            self.channel.id: {
+                "id": self.message.id,
+                "author_id": author.id,
+                "category": None,
+                "created_at": self.created_at.timestamp(),
+                "content": self.message.content,
+                "attachments": attachments
+            }
         }
         return final_json
 
@@ -174,3 +180,31 @@ class ModmailThread:
             "created_at": author.created_at.isoformat(),
         }
         return json_author
+
+    async def ask_for_type(self):
+        msg_ctx = await self.bot.get_context(self.message)
+        embed = discord.Embed(
+            color=discord.Color.green(),
+            title=f"Thank-you for contacting the mod team, {self.message.author.mention}\n\n",
+            description=(
+                f"In order for us to assist you further, "
+                f"please react below to the corresponding category of your message.\n\n"
+            ),
+        )
+        embed.add_field(
+            name="⚠ - To report another user.",
+            value=(
+                f"**Please provide as much information as possible.**\n"
+                f"You can attach screenshots and images to your message.\n"
+            ),
+        )
+        embed.add_field(
+            name="💬 - To submit a suggestion or feedback",
+            inline=False,
+            value=f"Please make your feedback into one formed message as multiples are not accepted.",
+        )
+        embed.set_footer(text="Abuse of this facility will not be tolerated.")
+
+        result = await message_type_reaction(msg_ctx, embed)
+
+        return result
