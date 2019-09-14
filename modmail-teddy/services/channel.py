@@ -8,7 +8,7 @@ log = logging.getLogger("red.modmail")
 
 
 class ChannelService:
-    def __init__(self, member, message: discord.Message, config, guild: discord.Guild):
+    def __init__(self, member, config, guild: discord.Guild):
         self.member = member
         self.config = config
         self.guild = guild

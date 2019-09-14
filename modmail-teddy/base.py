@@ -23,7 +23,7 @@ GUILD = 614954723816112266
 DEFAULT_USER = {
     "last_messaged": None,
     "thread_is_open": False,
-    "current_thread": 0,
+    "current_thread": None,
     "view_access": False,
     "blocked": False,
     "threads": [],
@@ -31,7 +31,7 @@ DEFAULT_USER = {
 }
 
 DEFAULT_GLOBAL = {
-    "threads": [],
+    "threads": {},
     "archive": [],
     "modmail_type": "channel",
     "allowed_roles": [],
@@ -84,13 +84,31 @@ class ModmailTeddy(commands.Cog):
                 print(f"Case load {c['name']} failed - {e}")
                 pass
 
-    async def is_modmail_channel(ctx):
-        return ctx.channel.id == 561686306866855979
+    @commands.Cog.listener()
+    async def on_guild_channel_delete(self, channel):
+        pass
 
-    @commands.command()
-    @commands.check(is_modmail_channel)
-    async def pp(self, ctx):
-        await ctx.send("in channel")
+    async def is_modmail_thread(self, channel: discord.TextChannel):
+        async with self.config.threads() as threads:
+            if str(channel.id) in threads.keys():
+                # the first message is always the user we want to reply to
+                return True, threads[str(channel.id)][0]['author_id']
+            else:
+                return False, None
+
+    @commands.Cog.listener(name="on_message")
+    async def _on_mod_reply(self, message: discord.Message):
+        if isinstance(message.channel, discord.abc.PrivateChannel):
+            return
+        if message.author.bot:
+            return
+        is_mod_channel, reply_to_id = await self.is_modmail_thread(message.channel)
+        if not is_mod_channel:
+            return
+        reply_to_user = self.bot.get_user(reply_to_id)
+        modmail_service = ModmailThread(message.author, message, self.config, self.bot)
+        await modmail_service.create_and_save(message.channel)
+        await reply_to_user.send(message.content)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
@@ -110,7 +128,7 @@ class ModmailTeddy(commands.Cog):
         except WaitingForMessageType as exception:
             return await author.send(exception.args[0])
 
-        message_service = ModmailThread(author, message, self.config, self.bot)
+        modmail_service = ModmailThread(author, message, self.config, self.bot)
 
         if can_send:
             # user is currently waiting for a reply
@@ -122,11 +140,11 @@ class ModmailTeddy(commands.Cog):
                 # set holding
                 await self.config.user(author).type_holding.set(True)
 
-                message_type = await message_service.ask_for_type()
+                message_type = await modmail_service.ask_for_type()
                 guild = self.bot.get_guild(await self.config.guild_id())
 
                 channel = await ChannelService(
-                    author, message, self.config, guild
+                    author, self.config, guild
                 ).create_new_channel()
 
             except NoNewCategory as e:
@@ -148,7 +166,7 @@ class ModmailTeddy(commands.Cog):
             finally:
                 await self.config.user(author).type_holding.set(False)
 
-        new_modmail_embed = await message_service.create_and_save()
+        new_modmail_embed = await modmail_service.create_and_save(channel)
 
         await self.config.user(author).thread_is_open.set(True)
         await self.config.user(author).current_thread.set(channel.id)

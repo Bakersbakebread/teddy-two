@@ -13,7 +13,6 @@ class ModmailThread:
         self.config = config
         self.bot = bot
         self.created_at = self.message.created_at
-        self.channel = self.message.channel
 
     async def build_user_info_embed(self):
         """Stolen from core red cogs and adapted where needed.."""
@@ -123,10 +122,13 @@ class ModmailThread:
 
         return embed
 
-    async def create_and_save(self) -> list:
-        new_thread = await self.create_new_json()
+    async def create_and_save(self, channel: discord.TextChannel) -> list:
+        new_thread = await self.create_new_json(channel)
         async with self.config.threads() as threads:
-            threads.append(new_thread)
+            if str(channel.id) in threads.keys():
+                threads[str(channel.id)].append(new_thread)
+            else:
+                threads[channel.id] = [new_thread]
 
         return [
             await self.build_user_info_embed(),
@@ -142,18 +144,17 @@ class ModmailThread:
 
         return new_reply
 
-    async def create_new_json(self):
+    async def create_new_json(self, channel: discord.TextChannel) -> dict:
         attachments = [a.url for a in self.message.attachments]
         author = self.message.author
         final_json = {
-            self.channel.id: {
                 "id": self.message.id,
                 "author_id": author.id,
                 "category": None,
                 "created_at": self.created_at.timestamp(),
                 "content": self.message.content,
                 "attachments": attachments
-            }
+
         }
         return final_json
 
@@ -184,24 +185,24 @@ class ModmailThread:
     async def ask_for_type(self):
         msg_ctx = await self.bot.get_context(self.message)
         embed = discord.Embed(
-            color=discord.Color.green(),
-            title=f"Thank-you for contacting the mod team, {self.message.author.mention}\n\n",
-            description=(
-                f"In order for us to assist you further, "
-                f"please react below to the corresponding category of your message.\n\n"
-            ),
+        color=discord.Color.green(),
+        title=f"Thank-you for contacting the mod team, {self.message.author.mention}\n\n",
+        description=(
+            f"In order for us to assist you further, "
+            f"please react below to the corresponding category of your message.\n\n"
+        ),
         )
         embed.add_field(
-            name="⚠ - To report another user.",
-            value=(
-                f"**Please provide as much information as possible.**\n"
-                f"You can attach screenshots and images to your message.\n"
-            ),
+        name="⚠ - To report another user.",
+        value=(
+            f"**Please provide as much information as possible.**\n"
+            f"You can attach screenshots and images to your message.\n"
+        ),
         )
         embed.add_field(
-            name="💬 - To submit a suggestion or feedback",
-            inline=False,
-            value=f"Please make your feedback into one formed message as multiples are not accepted.",
+        name="💬 - To submit a suggestion or feedback",
+        inline=False,
+        value=f"Please make your feedback into one formed message as multiples are not accepted.",
         )
         embed.set_footer(text="Abuse of this facility will not be tolerated.")
 
