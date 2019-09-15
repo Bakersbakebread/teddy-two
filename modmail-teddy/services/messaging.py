@@ -107,7 +107,7 @@ class ModmailThread:
         else:
             attachments_string = f" "
 
-        description = f"```{self.message.content}```\n"
+        description = f"```{self.message.content}⠀⠀```\n"
 
         embed = discord.Embed(
             description=description,

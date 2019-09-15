@@ -108,7 +108,16 @@ class ModmailTeddy(commands.Cog):
         reply_to_user = self.bot.get_user(reply_to_id)
         modmail_service = ModmailThread(message.author, message, self.config, self.bot)
         await modmail_service.create_and_save(message.channel)
-        await reply_to_user.send(message.content)
+        attachments = []
+        for a in message.attachments:
+            attachments.append(a.url)
+        message_to_send = f"{message.content}\n{attachments if len(attachments) > 0 else ' '}"
+        try:
+            await reply_to_user.send(message_to_send)
+        except discord.errors.HTTPException as e:
+            await message.channel.send(f"Failed to send message: {e.text}")
+            await message.add_reaction(emoji="❌")
+
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
